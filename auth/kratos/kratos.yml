@@ -1,0 +1,246 @@
+version: v1.1.0
+
+dsn: postgres://kratos:kratos@db:5432/kratos?sslmode=disable&max_conns=20&max_idle_conns=4
+
+serve:
+  public:
+    base_url: http://localhost:4433/
+    port: 4433
+    host: 0.0.0.0
+    cors:
+      enabled: true
+      allowed_origins:
+        - http://localhost:3000
+        - http://frontend:3000
+      allowed_methods:
+        - POST
+        - GET
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      allowed_headers:
+        - Authorization
+        - Cookie
+        - Content-Type
+        - X-Session-Token
+        - X-CSRF-Token
+      exposed_headers:
+        - Content-Type
+        - Set-Cookie
+      allow_credentials: true
+      debug: false
+  admin:
+    base_url: http://kratos:4434/
+    port: 4434
+    host: 0.0.0.0
+
+identity:
+  default_schema_id: user
+  schemas:
+    - id: user
+      url: file:///etc/config/kratos/identities/user.schema.json
+
+selfservice:
+  default_browser_return_url: http://localhost:3000/
+  allowed_return_urls:
+    - http://localhost:3000
+    - http://frontend:3000
+
+  methods:
+    password:
+      enabled: true
+      config:
+        haveibeenpwned_enabled: true
+        min_password_length: 8
+        identifier_similarity_check_enabled: true
+    totp:
+      enabled: false
+    webauthn:
+      enabled: false
+    link:
+      enabled: false
+    code:
+      enabled: true
+      config:
+        lifespan: 30m
+    oidc:
+      enabled: true
+      config:
+        providers:
+          - id: google
+            provider: google
+            label: Google
+            client_id: REPLACE_WITH_GOOGLE_CLIENT_ID
+            client_secret: REPLACE_WITH_GOOGLE_CLIENT_SECRET
+            mapper_url: file:///etc/config/kratos/oidc.google.jsonnet
+            scope:
+              - email
+              - profile
+            requested_claims:
+              id_token:
+                email:
+                  essential: true
+                email_verified:
+                  essential: true
+                given_name:
+                  essential: true
+                family_name:
+                  essential: true
+                picture:
+                  essential: true
+          - id: github
+            provider: github
+            label: GitHub
+            client_id: REPLACE_WITH_GITHUB_CLIENT_ID
+            client_secret: REPLACE_WITH_GITHUB_CLIENT_SECRET
+            mapper_url: file:///etc/config/kratos/oidc.github.jsonnet
+            scope:
+              - user:email
+              - read:user
+            requested_claims:
+              id_token:
+                email:
+                  essential: true
+                email_verified:
+                  essential: true
+                name:
+                  essential: true
+                avatar_url:
+                  essential: true
+
+  flows:
+    error:
+      ui_url: http://localhost:3000/error
+
+    settings:
+      ui_url: http://localhost:3000/settings
+      privileged_session_max_age: 15m
+      required_aal: highest_available
+      after:
+        password:
+          hooks:
+            - hook: session
+        profile:
+          hooks:
+            - hook: session
+        oidc:
+          hooks:
+            - hook: session
+
+    recovery:
+      enabled: true
+      ui_url: http://localhost:3000/recovery
+      use: code
+      lifespan: 1h
+      after:
+        hooks:
+          - hook: revoke_active_sessions
+
+    verification:
+      enabled: true
+      ui_url: http://localhost:3000/verification
+      use: code
+      lifespan: 1h
+      after:
+        hooks:
+          - hook: revoke_active_sessions
+
+    logout:
+      after:
+        default_browser_return_url: http://localhost:3000/login
+
+    login:
+      ui_url: http://localhost:3000/login
+      lifespan: 30m
+      after:
+        password:
+          hooks:
+            - hook: require_verified_address
+        oidc:
+          hooks:
+            - hook: require_verified_address
+
+    registration:
+      lifespan: 30m
+      ui_url: http://localhost:3000/registration
+      after:
+        password:
+          hooks:
+            - hook: session
+        oidc:
+          hooks:
+            - hook: session
+
+    # Deprecated alias for verification, kept for backward compat
+    # verify:
+    #   enabled: true
+
+log:
+  level: info
+  format: text
+  leak_sensitive_values: true
+
+secrets:
+  cookie:
+    - CHANGE_ME_PLEASE_USE_A_STRONG_RANDOM_SECRET_AT_LEAST_32_CHARS
+  cipher:
+    - CHANGE_ME_PLEASE_USE_A_DIFFERENT_STRONG_RANDOM_SECRET_AT_LEAST_32_CHARS
+  default:
+    - CHANGE_ME_ANOTHER_STRONG_RANDOM_SECRET_AT_LEAST_32_CHARS_PLEASE
+
+session:
+  lifespan: 24h
+  cookie:
+    persistent: true
+    same_site: Lax
+    path: /
+    domain: ""
+    name: kratos_session
+  whoami:
+    tokenizer:
+      headers:
+        - X-Session-Token
+
+courier:
+  smtp:
+    connection_uri: smtp://user:password@mailhog:1025/?skip_ssl_verify=true
+    from_address: no-reply@admin-dashboard.local
+    from_name: Admin Dashboard
+  channels:
+    - id: email
+      type: email
+      config:
+        smtp:
+          connection_uri: smtp://user:password@mailhog:1025/?skip_ssl_verify=true
+          from_address: no-reply@admin-dashboard.local
+          from_name: Admin Dashboard
+        templates:
+          login_code:
+            plaintext_body: file:///etc/config/kratos/courier/login_code.plaintext.gotmpl
+            body: file:///etc/config/kratos/courier/login_code.body.gotmpl
+            subject: file:///etc/config/kratos/courier/login_code.subject.gotmpl
+          registration:
+            plaintext_body: file:///etc/config/kratos/courier/registration.plaintext.gotmpl
+            body: file:///etc/config/kratos/courier/registration.body.gotmpl
+            subject: file:///etc/config/kratos/courier/registration.subject.gotmpl
+          verification:
+            plaintext_body: file:///etc/config/kratos/courier/verification.plaintext.gotmpl
+            body: file:///etc/config/kratos/courier/verification.body.gotmpl
+            subject: file:///etc/config/kratos/courier/verification.subject.gotmpl
+          recovery:
+            plaintext_body: file:///etc/config/kratos/courier/recovery.plaintext.gotmpl
+            body: file:///etc/config/kratos/courier/recovery.body.gotmpl
+            subject: file:///etc/config/kratos/courier/recovery.subject.gotmpl
+          # Legacy recovery still supported
+          recovery_invalid:
+            plaintext_body: file:///etc/config/kratos/courier/recovery_invalid.plaintext.gotmpl
+            body: file:///etc/config/kratos/courier/recovery_invalid.body.gotmpl
+            subject: file:///etc/config/kratos/courier/recovery_invalid.subject.gotmpl
+
+feature_flags:
+  use_continue_with_transitions: true
+
+password_policy:
+  have_i_been_pwned_host: https://api.pwnedpasswords.com
+  max_breaches: 0

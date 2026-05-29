@@ -1,0 +1,128 @@
+[
+  {
+    "id": "postgrest-public",
+    "description": "Public routes — no authentication required",
+    "upstream": {
+      "url": "http://postgrest:3000",
+      "preserve_host": false,
+      "strip_path": "/api/public"
+    },
+    "match": {
+      "url": "http://<.*>/api/public/<.*>",
+      "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    },
+    "authenticators": [
+      {
+        "handler": "anonymous"
+      }
+    ],
+    "authorizer": {
+      "handler": "allow"
+    },
+    "mutators": [
+      {
+        "handler": "noop"
+      }
+    ],
+    "errors": [
+      {
+        "handler": "json"
+      }
+    ]
+  },
+  {
+    "id": "postgrest-users",
+    "description": "Authenticated user routes — requires valid Kratos session",
+    "upstream": {
+      "url": "http://postgrest:3000",
+      "preserve_host": false,
+      "strip_path": "/api/users"
+    },
+    "match": {
+      "url": "http://<.*>/api/users/<.*>",
+      "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    },
+    "authenticators": [
+      {
+        "handler": "cookie_session"
+      },
+      {
+        "handler": "bearer_token"
+      }
+    ],
+    "authorizer": {
+      "handler": "allow"
+    },
+    "mutators": [
+      {
+        "handler": "header",
+        "config": {
+          "headers": {
+            "X-User-ID": "{{ .Subject }}",
+            "X-User-Email": "{{ .Extra.traits.email }}",
+            "X-User-Role": "{{ .Extra.traits.role }}",
+            "X-Authenticated": "true"
+          }
+        }
+      }
+    ],
+    "errors": [
+      {
+        "handler": "redirect"
+      },
+      {
+        "handler": "json"
+      }
+    ]
+  },
+  {
+    "id": "postgrest-admin",
+    "description": "Admin-only routes — requires valid Kratos session with admin role",
+    "upstream": {
+      "url": "http://postgrest:3000",
+      "preserve_host": false,
+      "strip_path": "/api/admin"
+    },
+    "match": {
+      "url": "http://<.*>/api/admin/<.*>",
+      "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    },
+    "authenticators": [
+      {
+        "handler": "cookie_session"
+      },
+      {
+        "handler": "bearer_token"
+      }
+    ],
+    "authorizer": {
+      "handler": "remote",
+      "config": {
+        "remote": "http://kratos:4434/identities/{{ .Subject }}",
+        "payload": "{\"subject\":\"{{ .Subject }}\",\"action\":\"access\",\"resource\":\"{{ .Match.URL }}\",\"context\":{\"role\":\"{{ .Extra.traits.role }}\",\"method\":\"{{ .RequestMethod }}\"}}"
+      }
+    },
+    "mutators": [
+      {
+        "handler": "header",
+        "config": {
+          "headers": {
+            "X-User-ID": "{{ .Subject }}",
+            "X-User-Role": "{{ .Extra.traits.role }}",
+            "X-User-Email": "{{ .Extra.traits.email }}",
+            "X-Authenticated": "true",
+            "X-Admin-Access": "true"
+          }
+        }
+      }
+    ],
+    "errors": [
+      {
+        "handler": "redirect"
+      },
+      {
+        "handler": "json"
+      }
+    ]
+  }
+]

@@ -1,0 +1,283 @@
+# =============================================================================
+# Ory Oathkeeper — API Access Proxy & Policy Engine
+# =============================================================================
+# Version:   v0.40.x
+# Ports:     4455 (proxy), 4456 (decision/API)
+# Upstream:  postgrest:3000
+# Session:   Ory Kratos (cookie_session authenticator)
+# JWT:       bear_token authenticator (optional)
+# =============================================================================
+
+log:
+  level: info
+  format: json
+
+serve:
+  proxy:
+    port: 4455
+    host: 0.0.0.0
+    timeout:
+      read: 5s
+      write: 10s
+      idle: 120s
+    cors:
+      enabled: true
+      allowed_origins:
+        - http://localhost:3000
+        - http://frontend:3000
+      allowed_methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      allowed_headers:
+        - Authorization
+        - Content-Type
+        - Cookie
+        - X-Session-Token
+        - X-CSRF-Token
+      exposed_headers:
+        - Content-Type
+        - Content-Length
+        - X-Request-Id
+      allow_credentials: true
+      debug: false
+    access_log:
+      disable: false
+      format: json
+
+  api:
+    port: 4456
+    host: 0.0.0.0
+    cors:
+      enabled: true
+      allowed_origins:
+        - http://localhost:3000
+        - http://frontend:3000
+      allowed_methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      allowed_headers:
+        - Authorization
+        - Content-Type
+      allow_credentials: true
+      debug: false
+
+# ---------------------------------------------------------------------------
+# Access Rules — loaded from mounted JSON files
+# ---------------------------------------------------------------------------
+access_rules:
+  repositories:
+    - file:///etc/config/oathkeeper/rules/*.json
+  matching_strategy: glob
+
+# ---------------------------------------------------------------------------
+# Authenticators — verify who the requestor is
+# ---------------------------------------------------------------------------
+authenticators:
+  cookie_session:
+    enabled: true
+    config:
+      check_session_url: http://kratos:4434/sessions/whoami
+      preserve_query: true
+      preserve_path: true
+      extra_from: "@this"
+      subject_from: "identity.id"
+      only:
+        - kratos_session
+      request:
+        method: GET
+        headers:
+          Cookie: "{{ print .Extra.CookieValue }}"
+
+  bearer_token:
+    enabled: true
+    config:
+      check_session_url: http://kratos:4434/sessions/whoami
+      preserve_query: true
+      preserve_path: true
+      extra_from: "@this"
+      subject_from: "identity.id"
+      token_from:
+        header: Authorization
+        query: access_token
+        cookie: kratos_session
+      scope_strategy: exact
+      set_as_header: true
+      set_as_cookie: true
+      additional_claims:
+        aud:
+          - admin-dashboard-api
+
+  noop:
+    enabled: true
+
+  anonymous:
+    enabled: true
+    config:
+      subject: anonymous
+
+  oauth2_client_credentials:
+    enabled: false
+
+  jwt:
+    enabled: true
+    config:
+      jwks_urls:
+        - http://kratos:4434/.well-known/jwks.json
+      scope_strategy: exact
+      set_as_header: true
+      set_as_cookie: true
+      claims:
+        - identity_id: identity.id
+        - email: traits.email
+        - role: traits.role
+
+# ---------------------------------------------------------------------------
+# Authorizers — decide if the authenticated requestor is allowed
+# ---------------------------------------------------------------------------
+authorizers:
+  allow:
+    enabled: true
+
+  deny:
+    enabled: true
+
+  remote:
+    enabled: true
+    config:
+      remote: http://kratos:4434/identities/{{ .Subject }}
+      payload: |
+        {
+          "subject": "{{ .Subject }}",
+          "match": [
+            { "url": "{{ print .RequestURL }}", "method": "{{ .RequestMethod }}" }
+          ]
+        }
+      prefer_forward_auth: false
+
+  required_roles:
+    enabled: true
+    config:
+      roles:
+        - admin
+      jwks_url: http://kratos:4434/.well-known/jwks.json
+      subject_from: "identity.id"
+
+# ---------------------------------------------------------------------------
+# Mutators — transform the request before forwarding to the upstream
+# ---------------------------------------------------------------------------
+mutators:
+  noop:
+    enabled: true
+
+  id_token:
+    enabled: true
+    config:
+      issuer_url: http://oathkeeper:4455/
+      jwks_url: file:///etc/config/oathkeeper/jwks.json
+      claims: |
+        {
+          "session": {{ .Extra | toJson }},
+          "identity_id": "{{ .Subject }}"
+        }
+
+  header:
+    enabled: true
+    config:
+      headers:
+        X-User-ID: "{{ .Subject }}"
+        X-User-Role: "{{ .Extra.traits.role }}"
+        X-User-Email: "{{ .Extra.traits.email }}"
+        X-Authenticated: "true"
+
+  cookie:
+    enabled: true
+    config:
+      cookies:
+        kratos_session: "{{ .Extra.kratos_session }}"
+
+# ---------------------------------------------------------------------------
+# Error handlers — what to do when auth fails
+# ---------------------------------------------------------------------------
+errors:
+  fallback:
+    - redirect_to_login
+
+  handlers:
+    redirect:
+      enabled: true
+      config:
+        to: http://localhost:3000/login
+        return_to_query_param: return_to
+        preserve_query: false
+        when:
+          - error:
+              - unauthorized
+              - authentication_required
+            request:
+              header:
+                Accept:
+                  - text/html
+                  - application/xhtml+xml
+
+    json:
+      enabled: true
+      config:
+        verbose: true
+        when:
+          - error:
+              - unauthorized
+              - forbidden
+            request:
+              header:
+                Accept:
+                  - application/json
+                  - application/vnd.api+json
+                  - "*/*"
+        # Fallback JSON handler for API clients
+        messages:
+          unauthorized:
+            code: 401
+            body: |
+              {
+                "error": {
+                  "code": 401,
+                  "status": "Unauthorized",
+                  "message": "The request could not be authenticated. Please provide valid credentials.",
+                  "request_id": "{{ .RequestID }}"
+                }
+              }
+          forbidden:
+            code: 403
+            body: |
+              {
+                "error": {
+                  "code": 403,
+                  "status": "Forbidden",
+                  "message": "You do not have the required permissions to access this resource.",
+                  "request_id": "{{ .RequestID }}"
+                }
+              }
+
+    redirect_to_login:
+      enabled: true
+      config:
+        to: http://localhost:3000/login
+        return_to_query_param: return_to
+        preserve_query: true
+        when:
+          - error:
+              - unauthorized
+              - authentication_required
+            request:
+              header:
+                Accept:
+                  - text/html
+                  - application/xhtml+xml

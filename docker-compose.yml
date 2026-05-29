@@ -1,0 +1,167 @@
+version: "3.9"
+
+networks:
+  admin-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mailhog_data:
+
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: admin-db
+    restart: unless-stopped
+    networks:
+      - admin-net
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin_dashboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_prod}
+      POSTGRES_DB: ${POSTGRES_DB:-admin_dashboard}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql
+      - ./backend/db/migrations/002_seed_data.sql:/docker-entrypoint-initdb.d/002_seed_data.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin_dashboard} -d ${POSTGRES_DB:-admin_dashboard}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── MailHog (dev email catcher) ──────────────────────────────
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: admin-mailhog
+    restart: unless-stopped
+    networks:
+      - admin-net
+    ports:
+      - "8025:8025"   # Web UI
+      - "1025:1025"   # SMTP
+    volumes:
+      - mailhog_data:/mailhog-data
+
+  # ── Ory Kratos (Identity & User Management) ──────────────────
+  kratos-migrate:
+    image: oryd/kratos:v1.1.0
+    container_name: admin-kratos-migrate
+    networks:
+      - admin-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DSN=postgres://${POSTGRES_USER:-admin_dashboard}:${POSTGRES_PASSWORD:-change_me_in_prod}@postgres:5432/${POSTGRES_DB:-admin_dashboard}?sslmode=disable
+      - SECRETS_COOKIE=${KRATOS_SECRETS_COOKIE:-ahV0eeph7pahp8ahgh6eegu7BuChaa9o}
+      - SECRETS_CIPHER=${KRATOS_SECRETS_CIPHER:-aiD4zooh3phoh9maTh7poh0aiw7waeJe}
+    volumes:
+      - ./auth/kratos:/etc/config/kratos:ro
+    command: migrate sql -e --yes /etc/config/kratos/kratos.yml
+    restart: on-failure
+
+  kratos:
+    image: oryd/kratos:v1.1.0
+    container_name: admin-kratos
+    restart: unless-stopped
+    networks:
+      - admin-net
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+      mailhog:
+        condition: service_started
+    ports:
+      - "4433:4433"   # Public API
+      - "4434:4434"   # Admin API
+    environment:
+      - DSN=postgres://${POSTGRES_USER:-admin_dashboard}:${POSTGRES_PASSWORD:-change_me_in_prod}@postgres:5432/${POSTGRES_DB:-admin_dashboard}?sslmode=disable
+      - SECRETS_COOKIE=${KRATOS_SECRETS_COOKIE:-ahV0eeph7pahp8ahgh6eegu7BuChaa9o}
+      - SECRETS_CIPHER=${KRATOS_SECRETS_CIPHER:-aiD4zooh3phoh9maTh7poh0aiw7waeJe}
+      - COURIER_SMTP_CONNECTION_URI=smtps://mailhog:1025/?skip_ssl_verify=true
+    volumes:
+      - ./auth/kratos:/etc/config/kratos:ro
+    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:4434/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── Ory Oathkeeper (Identity & Access Proxy) ────────────────
+  oathkeeper:
+    image: oryd/oathkeeper:v0.40.7
+    container_name: admin-oathkeeper
+    restart: unless-stopped
+    networks:
+      - admin-net
+    depends_on:
+      kratos:
+        condition: service_healthy
+    ports:
+      - "4455:4455"   # Proxy
+      - "4456:4456"   # Decision API
+    environment:
+      - KRATOS_PUBLIC_URL=http://kratos:4433
+    volumes:
+      - ./auth/oathkeeper:/etc/config/oathkeeper:ro
+    command: serve -c /etc/config/oathkeeper/oathkeeper.yml
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:4456/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── PostgREST (REST API from PostgreSQL) ─────────────────────
+  postgrest:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: admin-postgrest
+    restart: unless-stopped
+    networks:
+      - admin-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    environment:
+      PGRST_DB_URI: postgres://postgrest:${POSTGREST_PASSWORD:-postgrest_secret}@postgres:5432/${POSTGRES_DB:-admin_dashboard}
+      PGRST_DB_SCHEMA: api
+      PGRST_DB_ANON_ROLE: anonymous
+      PGRST_JWT_SECRET: ${PGRST_JWT_SECRET:-super-secret-jwt-key-change-in-prod}
+      PGRST_SERVER_PORT: "3000"
+      PGRST_DB_POOL: "10"
+      PGRST_OPENAPI_MODE: ignore-privileges
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── Nginx (Reverse Proxy) ────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: admin-nginx
+    restart: unless-stopped
+    networks:
+      - admin-net
+    depends_on:
+      postgrest:
+        condition: service_healthy
+      oathkeeper:
+        condition: service_healthy
+    ports:
+      - "8080:80"   # Main entry point
+    volumes:
+      - ./backend/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
