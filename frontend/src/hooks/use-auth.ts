@@ -13,5 +13,6 @@ export function useAuth() {
     login: context.login,
     logout: context.logout,
     register: context.register,
+    refreshSession: context.refreshSession,
   };
 }

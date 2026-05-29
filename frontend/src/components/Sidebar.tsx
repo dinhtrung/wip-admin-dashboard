@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useLocation } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
@@ -12,6 +12,7 @@ import {
   LogOut,
   Shield,
 } from "lucide-react";
+import { useAuth } from "../hooks/use-auth";
 
 const navItems = [
   {
@@ -34,6 +35,13 @@ const navItems = [
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+  const { logout } = useAuth();
+
+  async function handleLogout() {
+    await logout();
+    navigate({ to: "/login" });
+  }
 
   return (
     <aside
@@ -115,6 +123,7 @@ export function Sidebar() {
             "mt-1 w-full justify-start text-muted-foreground hover:text-destructive",
             collapsed && "justify-center",
           )}
+          onClick={handleLogout}
         >
           <LogOut className="h-4 w-4" />
           {!collapsed && <span>Log out</span>}

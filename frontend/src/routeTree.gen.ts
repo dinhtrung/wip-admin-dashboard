@@ -1,33 +1,67 @@
 // Route tree — organized in order of specificity
 // More specific routes (with path) should come after less specific ones
-// /users and /settings must appear after / in the children array
+// Auth routes (/login, /register, etc.) come before admin routes
 
 import { createRootRoute, createRoute } from "@tanstack/react-router";
 import { RootLayout } from "./routes/__root";
 import { DashboardPage } from "./routes/index";
 import { UsersPage } from "./routes/users/index";
 import { SettingsPage } from "./routes/settings";
+import { LoginPage } from "./routes/login";
+import { RegisterPage } from "./routes/register";
+import { RecoveryPage } from "./routes/recovery";
+import { VerificationPage } from "./routes/verification";
+import { ErrorPage } from "./routes/error";
 
 // Root route
 export const rootRoute = createRootRoute({
   component: RootLayout,
 });
 
-// Index (Dashboard) route
+// Auth routes (no sidebar/navbar)
+export const LoginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: LoginPage,
+});
+
+export const RegisterRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/register",
+  component: RegisterPage,
+});
+
+export const RecoveryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/recovery",
+  component: RecoveryPage,
+});
+
+export const VerificationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/verification",
+  component: VerificationPage,
+});
+
+export const ErrorRouteAlt = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/error",
+  component: ErrorPage,
+});
+
+// Admin routes (with sidebar/navbar)
 export const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: DashboardPage,
 });
 
-// Users route
 export const UsersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/users",
   component: UsersPage,
 });
 
-// Settings route
 export const SettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -36,6 +70,13 @@ export const SettingsRoute = createRoute({
 
 // Build the route tree
 export const routeTree = rootRoute.addChildren([
+  // Auth routes first
+  LoginRoute,
+  RegisterRoute,
+  RecoveryRoute,
+  VerificationRoute,
+  ErrorRouteAlt,
+  // Admin routes
   indexRoute,
   UsersRoute,
   SettingsRoute,
